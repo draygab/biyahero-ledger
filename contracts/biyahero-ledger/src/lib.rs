@@ -2,22 +2,19 @@
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short,
-    Address, BytesN, Env, Symbol
+    Address, BytesN, Env
 };
 
+// Fuel log structure
 #[derive(Clone)]
 #[contracttype]
 pub struct FuelLog {
     pub rider: Address,
-    pub price: i128,
-    pub liters: i128,
-    pub odometer: i128,
-    pub timestamp: u64,
     pub hash: BytesN<32>,
     pub verified: bool,
 }
 
-// Storage key
+// Storage key (rider + hash)
 #[derive(Clone)]
 #[contracttype]
 pub struct LogKey(pub Address, pub BytesN<32>);
@@ -28,29 +25,23 @@ pub struct BiyaheroLedger;
 #[contractimpl]
 impl BiyaheroLedger {
 
-    // 1. Register fuel log
+    // Register a fuel log (called by rider)
     pub fn register_fuel_log(
         env: Env,
         rider: Address,
-        price: i128,
-        liters: i128,
-        odometer: i128,
         hash: BytesN<32>,
     ) {
         rider.require_auth();
 
         let key = LogKey(rider.clone(), hash.clone());
 
+        // Prevent duplicate entries
         if env.storage().instance().has(&key) {
-            panic!("Duplicate fuel log");
+            panic!("Duplicate log");
         }
 
         let log = FuelLog {
             rider: rider.clone(),
-            price,
-            liters,
-            odometer,
-            timestamp: env.ledger().timestamp(),
             hash,
             verified: false,
         };
@@ -58,13 +49,15 @@ impl BiyaheroLedger {
         env.storage().instance().set(&key, &log);
     }
 
-    // 2. Verify log (platform side)
-    pub fn verify_log(env: Env, rider: Address, hash: BytesN<32>) {
+    // Verify fuel log (called by company)
+    pub fn verify_log(
+        env: Env,
+        rider: Address,
+        hash: BytesN<32>,
+    ) {
         let key = LogKey(rider.clone(), hash.clone());
 
-        let mut log: FuelLog = env
-            .storage()
-            .instance()
+        let mut log: FuelLog = env.storage().instance()
             .get(&key)
             .expect("Log not found");
 
@@ -72,13 +65,14 @@ impl BiyaheroLedger {
 
         env.storage().instance().set(&key, &log);
 
+        // Emit verification event
         env.events().publish(
             (symbol_short!("verified"), rider),
             hash
         );
     }
 
-    // 3. Distribute rebate
+    // Distribute rebate (XLM simulated)
     pub fn distribute_rebate(
         env: Env,
         rider: Address,
@@ -87,31 +81,32 @@ impl BiyaheroLedger {
     ) {
         let key = LogKey(rider.clone(), hash.clone());
 
-        let log: FuelLog = env
-            .storage()
-            .instance()
+        let log: FuelLog = env.storage().instance()
             .get(&key)
             .expect("Log not found");
 
         if !log.verified {
-            panic!("Log not verified");
+            panic!("Not verified");
         }
 
-        // Simplified transfer (native XLM)
+        // Require rider auth (simplified payout control)
         rider.require_auth();
 
         env.events().publish(
-            (symbol_short!("rebate_paid"), rider),
+            (symbol_short!("rebate"), rider),
             amount
         );
     }
 
-    // Helper: get log
-    pub fn get_log(env: Env, rider: Address, hash: BytesN<32>) -> FuelLog {
+    // Getter
+    pub fn get_log(
+        env: Env,
+        rider: Address,
+        hash: BytesN<32>,
+    ) -> FuelLog {
         let key = LogKey(rider, hash);
 
-        env.storage()
-            .instance()
+        env.storage().instance()
             .get(&key)
             .expect("Log not found")
     }
