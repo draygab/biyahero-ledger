@@ -1,67 +1,118 @@
-
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Env, String, Symbol, Vec};
 
-// Struktur data yang akan menyimpan notes
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short,
+    Address, BytesN, Env, Symbol
+};
+
+#[derive(Clone)]
 #[contracttype]
-#[derive(Clone, Debug)]
-pub struct Note {
-    id: u64,
-    title: String,
-    content: String,
+pub struct FuelLog {
+    pub rider: Address,
+    pub price: i128,
+    pub liters: i128,
+    pub odometer: i128,
+    pub timestamp: u64,
+    pub hash: BytesN<32>,
+    pub verified: bool,
 }
 
-// Storage key untuk data notes
-const NOTE_DATA: Symbol = symbol_short!("NOTE_DATA");
+// Storage key
+#[derive(Clone)]
+#[contracttype]
+pub struct LogKey(pub Address, pub BytesN<32>);
 
 #[contract]
-pub struct NotesContract;
+pub struct BiyaheroLedger;
 
 #[contractimpl]
-impl NotesContract {
-    pub fn get_notes(env: Env) -> Vec<Note> {
-        // 1. ambil data notes dari storage
-        return env.storage().instance().get(&NOTE_DATA).unwrap_or(Vec::new(&env));
-    }
+impl BiyaheroLedger {
 
-    // Fungsi untuk membuat note baru
-    pub fn create_note(env: Env, title: String, content: String) -> String {
-        // 1. ambil data notes dari storage
-        let mut notes: Vec<Note> = env.storage().instance().get(&NOTE_DATA).unwrap_or(Vec::new(&env));
-        
-        // 2. Buat object note baru
-        let note = Note {
-            id: env.prng().gen::<u64>(),
-            title: title,
-            content: content,
-        };
-        
-        // 3. tambahkan note baru ke notes lama
-        notes.push_back(note);
-        
-        // 4. simpan notes ke storage
-        env.storage().instance().set(&NOTE_DATA, &notes);
-        
-        return String::from_str(&env, "Notes berhasil ditambahkan");
-    }
+    // 1. Register fuel log
+    pub fn register_fuel_log(
+        env: Env,
+        rider: Address,
+        price: i128,
+        liters: i128,
+        odometer: i128,
+        hash: BytesN<32>,
+    ) {
+        rider.require_auth();
 
-    // Fungsi untuk menghapus notes berdasarkan id
-    pub fn delete_note(env: Env, id: u64) -> String {
-        // 1. ambil data notes dari storage 
-        let mut notes: Vec<Note> = env.storage().instance().get(&NOTE_DATA).unwrap_or(Vec::new(&env));
+        let key = LogKey(rider.clone(), hash.clone());
 
-        // 2. cari index note yang akan dihapus menggunakan perulangan
-        for i in 0..notes.len() {
-            if notes.get(i).unwrap().id == id {
-                notes.remove(i);
-
-                env.storage().instance().set(&NOTE_DATA, &notes);
-                return String::from_str(&env, "Berhasil hapus notes");
-            }
+        if env.storage().instance().has(&key) {
+            panic!("Duplicate fuel log");
         }
 
-        return String::from_str(&env, "Notes tidak ditemukan")
+        let log = FuelLog {
+            rider: rider.clone(),
+            price,
+            liters,
+            odometer,
+            timestamp: env.ledger().timestamp(),
+            hash,
+            verified: false,
+        };
+
+        env.storage().instance().set(&key, &log);
+    }
+
+    // 2. Verify log (platform side)
+    pub fn verify_log(env: Env, rider: Address, hash: BytesN<32>) {
+        let key = LogKey(rider.clone(), hash.clone());
+
+        let mut log: FuelLog = env
+            .storage()
+            .instance()
+            .get(&key)
+            .expect("Log not found");
+
+        log.verified = true;
+
+        env.storage().instance().set(&key, &log);
+
+        env.events().publish(
+            (symbol_short!("verified"), rider),
+            hash
+        );
+    }
+
+    // 3. Distribute rebate
+    pub fn distribute_rebate(
+        env: Env,
+        rider: Address,
+        hash: BytesN<32>,
+        amount: i128,
+    ) {
+        let key = LogKey(rider.clone(), hash.clone());
+
+        let log: FuelLog = env
+            .storage()
+            .instance()
+            .get(&key)
+            .expect("Log not found");
+
+        if !log.verified {
+            panic!("Log not verified");
+        }
+
+        // Simplified transfer (native XLM)
+        rider.require_auth();
+
+        env.events().publish(
+            (symbol_short!("rebate_paid"), rider),
+            amount
+        );
+    }
+
+    // Helper: get log
+    pub fn get_log(env: Env, rider: Address, hash: BytesN<32>) -> FuelLog {
+        let key = LogKey(rider, hash);
+
+        env.storage()
+            .instance()
+            .get(&key)
+            .expect("Log not found")
     }
 }
-
-mod test;
